@@ -15,7 +15,7 @@
     "preview": "electron-vite preview"
   },
   "build": {
-    "appId": "com.local.lasboard",
+    "appId": "com.serdargoleli.lasboard",
     "productName": "LasBoard",
     "files": [
       "out/**",
@@ -28,7 +28,11 @@
     "mac": {
       "category": "public.app-category.productivity",
       "icon": "logo-board.png",
-      "identity": null,
+      "hardenedRuntime": true,
+      "gatekeeperAssess": false,
+      "entitlements": "build/entitlements.mac.plist",
+      "entitlementsInherit": "build/entitlements.mac.inherit.plist",
+      "notarize": true,
       "target": [
         "dmg"
       ]
