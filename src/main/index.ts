@@ -139,6 +139,7 @@ function registerIpc(): void {
     mainWindow?.webContents.send('items:changed', repository.list())
     return next
   })
+  ipcMain.handle('app:version', () => app.getVersion())
   ipcMain.handle('app:logo-url', () => createLogoDataUrl())
   ipcMain.handle('window:hide', () => mainWindow?.hide())
 }

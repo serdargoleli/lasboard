@@ -1,5 +1,16 @@
 import { clipboard, nativeImage } from 'electron'
-import { existsSync, mkdirSync, statSync, watch, writeFileSync, type FSWatcher } from 'node:fs'
+import { execFileSync } from 'node:child_process'
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  rmSync,
+  statSync,
+  watch,
+  writeFileSync,
+  type FSWatcher
+} from 'node:fs'
+import { tmpdir } from 'node:os'
 import { basename, extname, join } from 'node:path'
 import {
   hashContent,
@@ -83,10 +94,15 @@ export class ClipboardWatcher {
     const settings = this.settings.get()
     const formats = clipboard.availableFormats()
 
-    if (settings.captureFiles) {
+    if (settings.captureImages || settings.captureFiles) {
       const filePaths = readClipboardFilePaths(formats)
       if (filePaths.length > 0) {
-        return this.createFileClipboardItem(filePaths)
+        const firstImagePath = settings.captureImages ? filePaths.find(isPreviewableImageFile) : undefined
+        if (firstImagePath) {
+          const imageItem = this.readImageFileClipboardItem(firstImagePath)
+          if (imageItem) return imageItem
+        }
+        if (settings.captureFiles) return this.createFileClipboardItem(filePaths)
       }
     }
 
@@ -97,9 +113,16 @@ export class ClipboardWatcher {
 
     const text = normalizeText(clipboard.readText())
     if (text) {
-      if (settings.captureFiles) {
+      if (settings.captureImages || settings.captureFiles) {
         const textFilePaths = filePathsFromText(text)
-        if (textFilePaths.length > 0) return this.createFileClipboardItem(textFilePaths)
+        if (textFilePaths.length > 0) {
+          const firstImagePath = settings.captureImages ? textFilePaths.find(isPreviewableImageFile) : undefined
+          if (firstImagePath) {
+            const imageItem = this.readImageFileClipboardItem(firstImagePath)
+            if (imageItem) return imageItem
+          }
+          if (settings.captureFiles) return this.createFileClipboardItem(textFilePaths)
+        }
       }
 
       const type = isLikelyUrl(text) ? 'url' : 'text'
@@ -175,6 +198,37 @@ export class ClipboardWatcher {
       thumbnailPath,
       thumbnailDataUrl: null,
       imageKind
+    }
+  }
+
+  private readImageFileClipboardItem(filePath: string): NewClipboardItem | null {
+    if (!existsSync(filePath) || !isPreviewableImageFile(filePath)) return null
+
+    const image = nativeImage.createFromPath(filePath)
+    if (image.isEmpty()) return null
+
+    const png = image.toPNG()
+    const hash = hashContent('image', png.toString('base64'))
+    const imagePath = join(this.imageDir, `${hash}.png`)
+    const thumbnailPath = join(this.imageDir, `${hash}-thumb.png`)
+    if (!existsSync(imagePath)) writeFileSync(imagePath, png)
+    if (!existsSync(thumbnailPath)) {
+      const thumbnail = image.resize({ width: 96, height: 96, quality: 'best' })
+      writeFileSync(thumbnailPath, thumbnail.toPNG())
+    }
+
+    const size = image.getSize()
+    return {
+      type: 'image',
+      title: basename(filePath),
+      preview: `${size.width} x ${size.height}`,
+      contentHash: hash,
+      textContent: null,
+      filePaths: [filePath],
+      imagePath,
+      thumbnailPath,
+      thumbnailDataUrl: null,
+      imageKind: 'image'
     }
   }
 
@@ -295,7 +349,13 @@ function readClipboardFilePaths(formats: string[]): string[] {
 
   const fileLikeFormats = formats.filter((format) => {
     const normalized = format.toLowerCase()
-    return normalized.includes('file') || normalized.includes('filename') || normalized.includes('furl')
+    return (
+      normalized.includes('file') ||
+      normalized.includes('filename') ||
+      normalized.includes('furl') ||
+      normalized.includes('url') ||
+      normalized.includes('pasteboard')
+    )
   })
 
   for (const format of fileLikeFormats) {
@@ -305,9 +365,58 @@ function readClipboardFilePaths(formats: string[]): string[] {
     const buffer = clipboard.readBuffer(format)
     const fromBuffer = filePathsFromPasteboardBuffer(buffer)
     if (fromBuffer.length > 0) return fromBuffer
+
+    const fromPlist = filePathsFromPlistBuffer(buffer)
+    if (fromPlist.length > 0) return fromPlist
+  }
+
+  if (process.platform === 'darwin' && hasLikelyMacFileFormat(formats)) {
+    const fromMacPasteboard = readMacPasteboardFilePaths()
+    if (fromMacPasteboard.length > 0) return fromMacPasteboard
   }
 
   return []
+}
+
+function hasLikelyMacFileFormat(formats: string[]): boolean {
+  return formats.some((format) => {
+    const normalized = format.toLowerCase()
+    return (
+      normalized.includes('file') ||
+      normalized.includes('filename') ||
+      normalized.includes('furl') ||
+      normalized.includes('finder') ||
+      normalized.includes('pasteboard')
+    )
+  })
+}
+
+function readMacPasteboardFilePaths(): string[] {
+  try {
+    const script = [
+      'ObjC.import("AppKit")',
+      'const pb = $.NSPasteboard.generalPasteboard',
+      'const items = pb.pasteboardItems',
+      'if (items) {',
+      '  for (let i = 0; i < items.count; i++) {',
+      '    const item = items.objectAtIndex(i)',
+      '    const types = item.types',
+      '    for (let j = 0; j < types.count; j++) {',
+      '      const value = item.stringForType(types.objectAtIndex(j))',
+      '      if (value) console.log(ObjC.unwrap(value))',
+      '    }',
+      '  }',
+      '}'
+    ].join(';')
+    const stdout = execFileSync('osascript', ['-l', 'JavaScript', '-e', script], {
+      encoding: 'utf8',
+      timeout: 1000,
+      stdio: ['ignore', 'pipe', 'ignore']
+    })
+    return filePathsFromText(stdout)
+  } catch {
+    return []
+  }
 }
 
 function readFileUrls(formats: string[]): string[] {
@@ -335,10 +444,47 @@ function filePathsFromPasteboardBuffer(buffer: Buffer): string[] {
   if (buffer.length === 0) return []
   const candidates = [
     buffer.toString('utf8'),
+    decodeUtf16Be(buffer).replace(/\0/g, ''),
     buffer.toString('utf16le').replace(/\0/g, ''),
     buffer.toString('latin1')
   ]
   return Array.from(new Set(candidates.flatMap(filePathsFromText)))
+}
+
+function decodeUtf16Be(buffer: Buffer): string {
+  const swapped = Buffer.alloc(buffer.length - (buffer.length % 2))
+  for (let index = 0; index < swapped.length; index += 2) {
+    swapped[index] = buffer[index + 1]
+    swapped[index + 1] = buffer[index]
+  }
+  return swapped.toString('utf16le')
+}
+
+function filePathsFromPlistBuffer(buffer: Buffer): string[] {
+  if (buffer.length === 0) return []
+
+  const tempDir = mkdtempSync(join(tmpdir(), 'lasboard-pasteboard-'))
+  const plistPath = join(tempDir, 'pasteboard-data')
+  try {
+    writeFileSync(plistPath, buffer)
+    const json = execFileSync('plutil', ['-convert', 'json', '-o', '-', plistPath], {
+      encoding: 'utf8',
+      timeout: 1000,
+      stdio: ['ignore', 'pipe', 'ignore']
+    })
+    return filePathsFromPlistValue(JSON.parse(json))
+  } catch {
+    return []
+  } finally {
+    rmSync(tempDir, { recursive: true, force: true })
+  }
+}
+
+function filePathsFromPlistValue(value: unknown): string[] {
+  if (typeof value === 'string') return filePathsFromText(value)
+  if (Array.isArray(value)) return Array.from(new Set(value.flatMap(filePathsFromPlistValue)))
+  if (!value || typeof value !== 'object') return []
+  return Array.from(new Set(Object.values(value).flatMap(filePathsFromPlistValue)))
 }
 
 function filePathsFromText(text: string): string[] {
@@ -348,12 +494,22 @@ function filePathsFromText(text: string): string[] {
     .map((line) => line.trim().replace(/^"|"$/g, ''))
     .filter(Boolean)
     .map((line) => {
-      if (line.startsWith('file://')) return decodeURIComponent(line.replace(/^file:\/\//, ''))
+      if (line.startsWith('file://')) return fileUrlToPath(line)
       return line
     })
     .filter((line) => line.startsWith('/') && existsSync(line))
 
   return Array.from(new Set(paths))
+}
+
+function fileUrlToPath(value: string): string {
+  try {
+    const url = new URL(value)
+    if (url.protocol !== 'file:') return value
+    return decodeURIComponent(url.pathname)
+  } catch {
+    return decodeURIComponent(value.replace(/^file:\/\/(?:localhost)?/, ''))
+  }
 }
 
 function extractFilePathCandidates(value: string): string[] {
@@ -373,7 +529,17 @@ function extractFilePathCandidates(value: string): string[] {
 function hasImageFormat(formats: string[]): boolean {
   return formats.some((format) => {
     const normalized = format.toLowerCase()
-    return normalized.includes('png') || normalized.includes('tiff') || normalized.includes('image')
+    return (
+      normalized.includes('png') ||
+      normalized.includes('jpg') ||
+      normalized.includes('jpeg') ||
+      normalized.includes('gif') ||
+      normalized.includes('webp') ||
+      normalized.includes('heic') ||
+      normalized.includes('tif') ||
+      normalized.includes('tiff') ||
+      normalized.includes('image')
+    )
   })
 }
 

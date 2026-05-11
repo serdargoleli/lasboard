@@ -9,6 +9,7 @@ const api: ClipboardApi = {
   pinItem: (id, pinned) => ipcRenderer.invoke('items:pin', id, pinned),
   getSettings: () => ipcRenderer.invoke('settings:get'),
   updateSettings: (settings: Partial<ClipboardSettings>) => ipcRenderer.invoke('settings:update', settings),
+  getAppVersion: () => ipcRenderer.invoke('app:version'),
   getLogoUrl: () => ipcRenderer.invoke('app:logo-url'),
   hideWindow: () => ipcRenderer.invoke('window:hide'),
   onItemsChanged: (callback: (items: ClipboardItem[]) => void) => {

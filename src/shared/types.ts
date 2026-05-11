@@ -36,6 +36,7 @@ export interface ClipboardApi {
   pinItem: (id: string, pinned: boolean) => Promise<void>
   getSettings: () => Promise<ClipboardSettings>
   updateSettings: (settings: Partial<ClipboardSettings>) => Promise<ClipboardSettings>
+  getAppVersion: () => Promise<string>
   getLogoUrl: () => Promise<string | null>
   hideWindow: () => Promise<void>
   onItemsChanged: (callback: (items: ClipboardItem[]) => void) => () => void

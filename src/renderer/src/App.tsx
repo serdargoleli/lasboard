@@ -23,7 +23,7 @@ import { Input } from './components/ui/input'
 import { ScrollArea } from './components/ui/scroll-area'
 import { Switch } from './components/ui/switch'
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from './components/ui/tooltip'
-import { getClipboardApi, getLogoUrl, getSettings, listItems } from './api'
+import { getAppVersion, getClipboardApi, getLogoUrl, getSettings, listItems } from './api'
 import { cn } from './lib/utils'
 
 const typeLabels: Record<ClipboardItem['type'], string> = {
@@ -63,6 +63,7 @@ export function App(): JSX.Element {
   const [selectedIndex, setSelectedIndex] = useState(0)
   const [toast, setToast] = useState<string | null>(null)
   const [logoUrl, setLogoUrl] = useState<string | null>(null)
+  const [appVersion, setAppVersion] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(() =>
     getClipboardApi() ? null : 'LasBoard desktop bridge is not loaded. Restart with npm run dev.'
   )
@@ -76,6 +77,7 @@ export function App(): JSX.Element {
     listItems().then(setItems).catch((reason) => setError(String(reason)))
     getSettings().then(setSettings).catch((reason) => setError(String(reason)))
     getLogoUrl().then(setLogoUrl).catch((reason) => setError(String(reason)))
+    getAppVersion().then(setAppVersion).catch((reason) => setError(String(reason)))
     const unsubscribe = api.onItemsChanged(setItems)
     return () => {
       unsubscribe()
@@ -142,7 +144,7 @@ export function App(): JSX.Element {
     <TooltipProvider delayDuration={250}>
       <main className="flex h-screen flex-col bg-background text-foreground">
         <header className="flex items-center gap-2 border-b border-border px-3 py-3">
-          <div className="flex h-9 w-9 shrink-0 items-center justify-center overflow-hidden rounded-md border border-border bg-popover">
+          <div className="flex h-9 w-9 shrink-0 items-center justify-center overflow-hidden border border-border bg-popover">
             {logoUrl ? (
               <img className="h-full w-full object-cover" src={logoUrl} alt="LasBoard" />
             ) : (
@@ -186,7 +188,7 @@ export function App(): JSX.Element {
             <TooltipContent>Refresh</TooltipContent>
           </Tooltip>
 
-          <SettingsDialog settings={settings} updateSettings={updateSettings} />
+          <SettingsDialog settings={settings} appVersion={appVersion} updateSettings={updateSettings} />
         </header>
 
         <nav className="flex gap-1 overflow-x-auto border-b border-border px-3 py-2">
@@ -363,9 +365,11 @@ function ClipboardRow({
 
 function SettingsDialog({
   settings,
+  appVersion,
   updateSettings
 }: {
   settings: ClipboardSettings | null
+  appVersion: string | null
   updateSettings: (patch: Partial<ClipboardSettings>) => Promise<void>
 }): JSX.Element {
   return (
@@ -409,11 +413,10 @@ function SettingsDialog({
               checked={settings.captureImages}
               onCheckedChange={(captureImages) => updateSettings({ captureImages })}
             />
-            <SettingsSwitch
-              label="Capture copied files"
-              checked={settings.captureFiles}
-              onCheckedChange={(captureFiles) => updateSettings({ captureFiles })}
-            />
+            <div className="flex items-center justify-between border-t border-border pt-3 text-sm">
+              <span className="font-medium">Version</span>
+              <span className="font-mono text-xs text-muted-foreground">{appVersion ?? '-'}</span>
+            </div>
             <div className="flex justify-end border-t border-border pt-3">
               <Button variant="destructive" size="sm" onClick={() => getClipboardApi()?.clearHistory()}>
                 <Trash className="mr-2 h-4 w-4" />

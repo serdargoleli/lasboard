@@ -22,6 +22,11 @@ export async function getSettings(): Promise<ClipboardSettings> {
   return api ? api.getSettings() : fallbackSettings
 }
 
+export async function getAppVersion(): Promise<string> {
+  const api = getClipboardApi()
+  return api ? api.getAppVersion() : '0.1.0'
+}
+
 export async function getLogoUrl(): Promise<string | null> {
   const api = getClipboardApi()
   return api ? api.getLogoUrl() : null
